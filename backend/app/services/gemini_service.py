@@ -75,7 +75,11 @@ class GeminiService:
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
-                response = await client.aio.models.generate_content(**call_kwargs)
+                per_call_timeout = max(5, int(settings.REQUEST_TIMEOUT_SECONDS))
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(**call_kwargs),
+                    timeout=per_call_timeout,
+                )
                 output_text = response.text if response and response.text else ""
                 return output_text
 
