@@ -328,3 +328,27 @@ class GeminiService:
             schema_cls=DocumentResult,
             mode_label="document",
         )
+
+    async def answer_chat(
+        self,
+        question: str,
+        session_id: str,
+        analysis_type: Optional[str] = None,
+    ) -> str:
+        """
+        Executes follow-up engineering query with conversational context.
+        """
+        system_instruction = (
+            "You are OmniSolve AI, an expert multimodal engineering assistant specializing in software debugging, "
+            "circuit analysis, and technical document explanation powered by Gemma 4. Provide clear, accurate, "
+            "practical answers grounded in engineering best practices. Be concise and actionable."
+        )
+        mode_context = f" Mode: {analysis_type}." if analysis_type else ""
+        prompt_text = f"{system_instruction}\n\nContext:{mode_context}\nUser Question: {question.strip()}"
+        contents = [prompt_text]
+
+        raw_output = await self._execute_model_call(
+            contents=contents,
+            response_schema=None,  # Free-form conversational response
+        )
+        return raw_output.strip()

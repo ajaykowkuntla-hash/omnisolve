@@ -206,3 +206,19 @@ AnalysisEnvelope = Union[
     CircuitAnalysisResponse,
     DocumentAnalysisResponse,
 ]
+
+# ============================================================================
+# Contextual Chat Schemas
+# ============================================================================
+
+class ChatRequest(BaseModel):
+    """Payload for conversational follow-up questions."""
+    session_id: str = Field(..., description="Active analysis session identifier.")
+    question: str = Field(..., min_length=1, max_length=2000, description="Follow-up question.")
+    analysis_type: Optional[str] = Field(default=None, description="Active analysis mode context.")
+
+
+class ChatResponse(BaseModel):
+    """Response returned for conversational chat messages."""
+    session_id: str = Field(..., description="Session identifier.")
+    answer: str = Field(..., description="Gemma 4 generated answer to follow-up inquiry.")

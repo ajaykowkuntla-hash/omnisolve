@@ -11,6 +11,8 @@ from app.schemas import (
     DocumentAnalysisResponse,
     HealthResponse,
     ScreenshotAnalysisResponse,
+    ChatRequest,
+    ChatResponse,
 )
 from app.services.document_service import DocumentService
 from app.services.gemini_service import GeminiService
@@ -128,3 +130,25 @@ async def analyze_content(
             result=result,
             warnings=response_warnings,
         )
+
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Follow-up conversational engineering assistant",
+    description="Processes follow-up questions for the active analysis session.",
+)
+async def chat_message(payload: ChatRequest) -> ChatResponse:
+    """
+    Handles follow-up engineering inquiries.
+    """
+    gemini_service = GeminiService()
+    answer_text = await gemini_service.answer_chat(
+        question=payload.question,
+        session_id=payload.session_id,
+        analysis_type=payload.analysis_type,
+    )
+    return ChatResponse(
+        session_id=payload.session_id,
+        answer=answer_text,
+    )
