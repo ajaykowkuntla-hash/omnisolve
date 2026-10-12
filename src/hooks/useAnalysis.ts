@@ -140,7 +140,7 @@ export function useAnalysis(isBackendOnline: boolean) {
       // If user is trying live mode but backend is known offline, inform them explicitly
       if (!isMockMode && !isBackendOnline) {
         setErrorMessage(
-          'Backend service is currently offline. Start Amay\'s FastAPI server at http://localhost:8000, or toggle "Mock UI Mode" in the sidebar to preview frontend features.'
+          'Backend service is currently offline. Please verify that the FastAPI backend at https://omnisolve-backend.onrender.com is running, or toggle "Mock UI Mode" in the sidebar to preview frontend features.'
         );
         setStatus('error');
         return;
