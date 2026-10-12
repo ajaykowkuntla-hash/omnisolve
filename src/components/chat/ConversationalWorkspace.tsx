@@ -593,8 +593,16 @@ export const ConversationalWorkspace: React.FC<ConversationalWorkspaceProps> = (
                       <div className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed ${
                         isUser
                           ? 'bg-white text-[#080C12] font-normal rounded-tr-sm shadow-sm'
+                          : msg.isError
+                          ? 'bg-rose-950/40 border border-rose-500/40 text-rose-200 rounded-tl-sm'
                           : 'verity-card text-white/90 rounded-tl-sm'
                       }`}>
+                        {msg.isError && (
+                          <div className="flex items-center space-x-1.5 text-rose-400 font-mono text-[11px] mb-1.5 font-semibold">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>Diagnostic Error</span>
+                          </div>
+                        )}
                         <p className="whitespace-pre-wrap">{msg.content}</p>
                       </div>
                     )}

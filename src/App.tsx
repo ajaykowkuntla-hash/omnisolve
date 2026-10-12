@@ -29,6 +29,7 @@ export function App() {
     status,
     result,
     sessionId,
+    errorMessage: analysisError,
     isMockMode,
     setIsMockMode,
     runAnalysis,
@@ -281,7 +282,7 @@ export function App() {
     await sendMessage(text);
   };
 
-  // Synchronize successful analysis result from Gemma into conversation message stream
+  // Synchronize successful analysis result or failure from Gemma into conversation message stream
   useEffect(() => {
     if (status === 'success' && result) {
       const alreadyHasResult = messages.some((m) => m.analysisResult === result);
@@ -298,8 +299,23 @@ export function App() {
         setMessages(next);
         persistMessagesToConversation(next);
       }
+    } else if (status === 'error' && analysisError) {
+      const alreadyHasError = messages.some((m) => m.isError && m.content === analysisError);
+      if (!alreadyHasError) {
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const errorMsg: ChatMessage = {
+          id: `msg_err_${Date.now()}`,
+          sender: 'assistant',
+          content: analysisError,
+          timestamp,
+          isError: true,
+        };
+        const next = [...messages, errorMsg];
+        setMessages(next);
+        persistMessagesToConversation(next);
+      }
     }
-  }, [status, result, setMessages, messages, persistMessagesToConversation]);
+  }, [status, result, analysisError, setMessages, messages, persistMessagesToConversation]);
 
   // Synchronize assistant chat message updates into saved conversation
   useEffect(() => {
@@ -336,7 +352,7 @@ export function App() {
             onSelectMode={switchMode}
             messages={messages}
             isWaiting={isWaitingChat || status === 'analyzing'}
-            chatError={chatError}
+            chatError={chatError || analysisError}
             isOnline={isOnline}
             isMockMode={isMockMode}
             onToggleMockMode={() => setIsMockMode(!isMockMode)}
