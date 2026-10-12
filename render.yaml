@@ -13,7 +13,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemma-4-31b-it
+        value: gemini-2.0-flash
       - key: REQUEST_TIMEOUT_SECONDS
         value: "90"
       - key: CORS_ORIGINS

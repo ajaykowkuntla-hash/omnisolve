@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import time
+import uuid
 from typing import List, Optional, Type, TypeVar
 from fastapi import HTTPException, status
 from google import genai
@@ -25,7 +27,7 @@ class GeminiService:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self._api_key = api_key or settings.GEMINI_API_KEY
-        self._model = model or settings.GEMINI_MODEL or "gemma-4-31b-it"
+        self._model = model or settings.GEMINI_MODEL or "gemini-2.0-flash"
 
     def _get_client(self) -> genai.Client:
         """Instantiate client, verifying credentials server-side and attaching transport timeout options."""
@@ -50,14 +52,17 @@ class GeminiService:
         response_schema: Type[BaseModel],
     ) -> str:
         """
-        Executes outbound call to Gemma 4 via Google Gen AI with structured output,
-        timeout boundaries, single controlled retry, and sanitized error mapping.
+        Executes outbound call via Google Gen AI SDK with structured output,
+        correlation ID, structured elapsed-time logging, bounded timeout, and sanitized error mapping.
+        Never logs API keys or sensitive document/input contents.
         """
         client = self._get_client()
+        corr_id = f"gen_{uuid.uuid4().hex[:8]}"
+        start_time = time.monotonic()
 
-        # Gemma open models on Google AI Studio do not support server-enforced response_schema
-        # or response_mime_type="application/json", which triggers upstream APIError 500.
-        # Format adherence is guided by prompt schema instructions and validated via Pydantic.
+        # Gemma open models do not support server-side response_schema or response_mime_type="application/json"
+        # which triggers upstream APIError 500 on Google AI Studio.
+        # Standard Gemini models (gemini-2.0-flash, gemini-1.5-flash) fully support structured output schemas.
         config = None
         if response_schema is not None and not self._model.lower().startswith("gemma"):
             config = types.GenerateContentConfig(
@@ -74,6 +79,7 @@ class GeminiService:
 
         max_attempts = 2
         for attempt in range(max_attempts):
+            attempt_start = time.monotonic()
             try:
                 per_call_timeout = max(5, int(settings.REQUEST_TIMEOUT_SECONDS))
                 response = await asyncio.wait_for(
@@ -81,43 +87,77 @@ class GeminiService:
                     timeout=per_call_timeout,
                 )
                 output_text = response.text if response and response.text else ""
+                elapsed = time.monotonic() - attempt_start
+                logger.info(
+                    "AI model generation success: corr_id=%s, model=%s, attempt=%d, elapsed=%.2fs",
+                    corr_id,
+                    self._model,
+                    attempt + 1,
+                    elapsed,
+                )
                 return output_text
 
             except HTTPException:
                 raise
 
             except errors.APIError as exc:
-                logger.error("Gemini API provider error: code=%s, msg=%s", getattr(exc, "code", "unknown"), getattr(exc, "message", "unknown"))
+                elapsed = time.monotonic() - attempt_start
                 status_code = getattr(exc, "code", None)
+                raw_msg = str(getattr(exc, "message", ""))
+                low_msg = raw_msg.lower()
 
-                # Retry transient errors once if attempts remain
-                if attempt < max_attempts - 1 and status_code in (500, 502, 503, 504):
-                    logger.warning("Transient provider error (%s). Retrying attempt %d...", status_code, attempt + 2)
+                logger.error(
+                    "AI model provider error: corr_id=%s, model=%s, attempt=%d, status=%s, elapsed=%.2fs, error_type=APIError",
+                    corr_id,
+                    self._model,
+                    attempt + 1,
+                    status_code,
+                    elapsed,
+                )
+
+                # Retry transient server errors (500, 503) once if attempts remain
+                # Permanent errors (400 invalid model/req, 401 auth, 403 forbidden, 404 not found, 429 quota) are NEVER retried
+                if attempt < max_attempts - 1 and status_code in (500, 503):
+                    logger.warning(
+                        "Transient server error (%s). Retrying corr_id=%s attempt %d...",
+                        status_code,
+                        corr_id,
+                        attempt + 2,
+                    )
                     await asyncio.sleep(0.5)
                     continue
 
-                if status_code in (408, 504):
+                # Map to sanitized, actionable error responses without exposing keys or headers
+                if status_code in (404,) or "not found" in low_msg or "is not supported" in low_msg:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail={
+                            "code": "MODEL_UNAVAILABLE",
+                            "message": f"Configured model '{self._model}' is not supported or not found by Google AI. Please check GEMINI_MODEL setting.",
+                        },
+                    )
+                elif status_code in (401, 403) or "api_key_invalid" in low_msg or "permission_denied" in low_msg:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail={
+                            "code": "MODEL_UNAVAILABLE",
+                            "message": "Authentication with the AI model provider failed. Please verify GEMINI_API_KEY.",
+                        },
+                    )
+                elif status_code == 429 or "resource_exhausted" in low_msg or "quota" in low_msg:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail={
+                            "code": "MODEL_UNAVAILABLE",
+                            "message": "AI model request quota or rate limit exceeded. Please try again later.",
+                        },
+                    )
+                elif status_code in (408, 504) or "timeout" in low_msg or "deadline" in low_msg:
                     raise HTTPException(
                         status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                         detail={
                             "code": "MODEL_TIMEOUT",
                             "message": "The AI analysis model request timed out.",
-                        },
-                    )
-                elif status_code in (401, 403):
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail={
-                            "code": "MODEL_UNAVAILABLE",
-                            "message": "Authentication with the AI model provider failed.",
-                        },
-                    )
-                elif status_code == 429:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail={
-                            "code": "MODEL_UNAVAILABLE",
-                            "message": "AI model request quota or rate limit exceeded.",
                         },
                     )
                 else:
@@ -129,17 +169,33 @@ class GeminiService:
                         },
                     )
 
-            except (TimeoutError, Exception) as exc:
-                exc_str = str(exc).lower()
-                if "timeout" in exc_str or "timed out" in exc_str:
-                    raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                        detail={
-                            "code": "MODEL_TIMEOUT",
-                            "message": "The AI analysis model request timed out.",
-                        },
-                    )
-                logger.error("Provider execution failure during attempt %d: %s", attempt + 1, type(exc).__name__)
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                elapsed = time.monotonic() - attempt_start
+                logger.error(
+                    "AI model generation timed out: corr_id=%s, model=%s, attempt=%d, elapsed=%.2fs",
+                    corr_id,
+                    self._model,
+                    attempt + 1,
+                    elapsed,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail={
+                        "code": "MODEL_TIMEOUT",
+                        "message": "The AI analysis model request timed out.",
+                    },
+                )
+
+            except Exception as exc:
+                elapsed = time.monotonic() - attempt_start
+                logger.error(
+                    "AI provider unexpected error: corr_id=%s, model=%s, attempt=%d, elapsed=%.2fs, error_class=%s",
+                    corr_id,
+                    self._model,
+                    attempt + 1,
+                    elapsed,
+                    type(exc).__name__,
+                )
                 if attempt == max_attempts - 1:
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -150,6 +206,7 @@ class GeminiService:
                     )
                 await asyncio.sleep(0.5)
 
+        total_elapsed = time.monotonic() - start_time
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={

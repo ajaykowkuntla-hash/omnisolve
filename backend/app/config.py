@@ -25,8 +25,8 @@ class Settings(BaseSettings):
         description="Google Gemini API key kept strictly server-side.",
     )
     GEMINI_MODEL: str = Field(
-        default="gemma-4-31b-it",
-        description="Verified Gemma 4 model identifier supported by the Gemini API.",
+        default="gemini-2.0-flash",
+        description="Default model identifier supported by the Google Gen AI API (e.g. gemini-2.0-flash, gemini-1.5-flash, or gemma-2-27b-it).",
     )
 
     # Operational limits
